@@ -3,142 +3,186 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Secure Chat</title>
+    <title>Messenger</title>
+    
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3665/3665913.png">
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #000000; color: #ffffff; margin: 0; padding: env(safe-area-inset-top) 20px 20px 20px; display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; }
-        #setup, #chat { background: #1c1c1e; padding: 20px; border-radius: 16px; max-width: 600px; width: 100%; margin: 0 auto; }
+
+    <style id="theme-style">
+        /* Default Setup UI */
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; transition: background 0.3s; }
+        #setup, #chat { padding: 20px; border-radius: 16px; max-width: 600px; width: 100%; margin: 0 auto; }
+        #setup { background: #f2f2f7; color: #000; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
         #chat { display: none; flex-direction: column; height: 100%; }
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-        input, button { padding: 14px; margin-bottom: 12px; border-radius: 10px; border: 1px solid #3a3a3c; font-size: 16px; background: #2c2c2e; color: white; }
-        button { background-color: #0a84ff; border: none; font-weight: bold; cursor: pointer; }
-        #messages { flex-grow: 1; overflow-y: auto; margin-bottom: 15px; display: flex; flex-direction: column; }
-        .msg-wrapper { display: flex; flex-direction: column; margin-bottom: 12px; max-width: 80%; cursor: pointer; }
+        
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+        .leave-btn { background: #ff3b30; font-size: 12px; padding: 6px 12px; border-radius: 8px; border: none; color: white; cursor: pointer; }
+
+        input, button { padding: 14px; margin-bottom: 12px; border-radius: 10px; border: 1px solid #ccc; font-size: 16px; -webkit-appearance: none; }
+        button { background-color: #007aff; color: white; border: none; cursor: pointer; font-weight: bold; }
+        
+        #messages { flex-grow: 1; overflow-y: auto; margin-bottom: 15px; padding: 15px; border-radius: 12px; display: flex; flex-direction: column; }
+        .msg-wrapper { display: flex; flex-direction: column; margin-bottom: 16px; max-width: 75%; }
         .my-wrapper { align-self: flex-end; align-items: flex-end; }
         .other-wrapper { align-self: flex-start; align-items: flex-start; }
-        .message { padding: 10px 14px; border-radius: 18px; font-size: 15px; }
-        .my-message { background-color: #0a84ff; }
-        .other-message { background-color: #3a3a3c; }
-        .meta { font-size: 11px; opacity: 0.5; margin-bottom: 2px; }
+        .meta { font-size: 11px; opacity: 0.6; margin-bottom: 2px; }
+        .message { padding: 8px 14px; border-radius: 18px; word-wrap: break-word; font-size: 15px; }
+        
         .input-area { display: flex; gap: 8px; }
         .input-area input { flex-grow: 1; margin-bottom: 0; }
+        .gif-img { max-width: 100%; border-radius: 12px; margin-top: 4px; }
     </style>
 </head>
-<body>
+<body id="main-body">
+
     <div id="setup">
-        <h2 style="text-align:center">Secure Chat 🔒</h2>
-        <input type="text" id="username" placeholder="Your Name">
-        <input type="text" id="avatar" placeholder="Avatar Emoji (e.g. 🖕)">
-        <input type="password" id="groupSecret" placeholder="Group Password">
-        <button onclick="joinChat()" style="width:100%">Join Group</button>
+        <h2 style="text-align: center;">Messenger</h2>
+        <input type="text" id="username" placeholder="Name">
+        <input type="text" id="avatar" placeholder="Emoji (e.g. 🖕)">
+        <input type="password" id="groupSecret" placeholder="Code">
+        <button onclick="joinChat()" style="width:100%;">Continue</button>
     </div>
 
     <div id="chat">
         <div class="header">
-            <span id="room-display" style="color:#8e8e93"></span>
-            <button onclick="location.reload()" style="padding:5px 10px; font-size:12px; background:#ff3b30">Leave</button>
+            <span id="display-name" style="font-weight: bold; font-size: 14px; color: #8e8e93;"></span>
+            <button class="leave-btn" onclick="leaveChat()">Leave</button>
         </div>
         <div id="messages"></div>
         <div class="input-area">
-            <button onclick="sendGif()" style="background:#ff375f">GIF</button>
-            <input type="text" id="messageInput" placeholder="Message...">
-            <button onclick="sendText()">Send</button>
+            <button style="background:#ff375f;" onclick="sendGif()">GIF</button>
+            <input type="text" id="messageInput" placeholder="Message..." autocomplete="off">
+            <button id="send-btn" onclick="sendText()">Send</button>
         </div>
     </div>
 
     <script>
-        let ws, username, userAvatar, cryptoKey, groupPass;
-        const rendered = new Set();
+        let ws; let username; let userAvatar; let cryptoKey; let isPrivate = false;
+        const renderedMessages = new Set();
 
-        async function deriveKey(p) {
+        async function deriveKey(password) {
             const enc = new TextEncoder();
-            const m = await window.crypto.subtle.importKey("raw", enc.encode(p), "PBKDF2", false, ["deriveKey"]);
-            return window.crypto.subtle.deriveKey({name:"PBKDF2", salt:enc.encode("salt"), iterations:100000, hash:"SHA-256"}, m, {name:"AES-GCM", length:256}, false, ["encrypt", "decrypt"]);
+            const keyMaterial = await window.crypto.subtle.importKey("raw", enc.encode(password), { name: "PBKDF2" }, false, ["deriveKey"]);
+            return window.crypto.subtle.deriveKey(
+                { name: "PBKDF2", salt: enc.encode("secure-chat-salt"), iterations: 100000, hash: "SHA-256" },
+                keyMaterial, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]
+            );
         }
 
-        async function encrypt(d) {
-            const enc = new TextEncoder(), iv = window.crypto.getRandomValues(new Uint8Array(12));
-            const c = await window.crypto.subtle.encrypt({name:"AES-GCM", iv}, cryptoKey, enc.encode(JSON.stringify(d)));
-            const combined = new Uint8Array(iv.length + c.byteLength);
-            combined.set(iv); combined.set(new Uint8Array(c), 12);
+        function applyTheme(isGod) {
+            const body = document.getElementById("main-body");
+            const msgs = document.getElementById("messages");
+            const chatBox = document.getElementById("chat");
+            const inputs = document.querySelectorAll("input");
+
+            if (isGod) {
+                body.style.backgroundColor = "#000000";
+                chatBox.style.backgroundColor = "#1c1c1e";
+                msgs.style.backgroundColor = "#000";
+                msgs.style.border = "1px solid #3a3a3c";
+                inputs.forEach(i => { i.style.background = "#2c2c2e"; i.style.color = "white"; i.style.borderColor = "#3a3a3c"; });
+                isPrivate = true;
+            } else {
+                body.style.backgroundColor = "#ffffff";
+                chatBox.style.backgroundColor = "#ffffff";
+                msgs.style.backgroundColor = "#f2f2f7";
+                msgs.style.border = "1px solid #e5e5ea";
+                inputs.forEach(i => { i.style.background = "#ffffff"; i.style.color = "black"; i.style.borderColor = "#ccc"; });
+                isPrivate = false;
+            }
+        }
+
+        async function encryptData(dataObj) {
+            const enc = new TextEncoder();
+            const iv = window.crypto.getRandomValues(new Uint8Array(12));
+            const ciphertext = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv: iv }, cryptoKey, enc.encode(JSON.stringify(dataObj)));
+            const combined = new Uint8Array(iv.length + ciphertext.byteLength);
+            combined.set(iv); combined.set(new Uint8Array(ciphertext), iv.length);
             return btoa(String.fromCharCode(...combined));
         }
 
-        async function decrypt(b) {
+        async function decryptData(base64String) {
             try {
-                const c = new Uint8Array(atob(b).split('').map(x=>x.charCodeAt(0)));
-                const d = await window.crypto.subtle.decrypt({name:"AES-GCM", iv:c.slice(0,12)}, cryptoKey, c.slice(12));
-                return JSON.parse(new TextDecoder().decode(d));
-            } catch(e) { return null; }
+                const combined = new Uint8Array(atob(base64String).split('').map(c => c.charCodeAt(0)));
+                const iv = combined.slice(0, 12); const ciphertext = combined.slice(12);
+                const decrypted = await window.crypto.subtle.decrypt({ name: "AES-GCM", iv: iv }, cryptoKey, ciphertext);
+                return JSON.parse(new TextDecoder().decode(decrypted));
+            } catch (e) { return null; }
         }
 
         async function joinChat() {
-            groupPass = document.getElementById("groupSecret").value;
             username = document.getElementById("username").value;
             userAvatar = document.getElementById("avatar").value || "👤";
-            if(!groupPass || !username) return alert("Missing info");
-            cryptoKey = await deriveKey(groupPass);
+            const secret = document.getElementById("groupSecret").value;
+            if (!username || !secret) return;
+
+            applyTheme(secret === "GOD");
+            cryptoKey = await deriveKey(secret);
+            
+            document.getElementById("setup").style.display = "none";
+            document.getElementById("chat").style.display = "flex";
+            
+            // Only load history if the secret is "GOD"
+            if (secret === "GOD") {
+                const response = await fetch('/history');
+                const messages = await response.json();
+                for (let msg of messages) {
+                    const dec = await decryptData(msg.ciphertext);
+                    if (dec) renderMessage(msg.id, msg.sender, msg.avatar, dec.text, dec.time, dec.isGif, msg.sender === username);
+                }
+            }
 
             const protocol = window.location.protocol === "https:" ? "wss" : "ws";
             ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
             
-            ws.onopen = () => ws.send(JSON.stringify({type:"join", password:groupPass}));
-            
-            ws.onmessage = async (e) => {
-                const p = JSON.parse(e.data);
-                if(p.type === "room_info") {
-                    let name = p.room_name || prompt("New Room! Name it:");
-                    if(!p.room_name) ws.send(JSON.stringify({type:"create_room", password:groupPass, room_name:name}));
-                    document.getElementById("room-display").innerText = name;
-                    document.getElementById("setup").style.display = "none";
-                    document.getElementById("chat").style.display = "flex";
-                    const h = await fetch(`/history/${groupPass}`).then(r=>r.json());
-                    for(let m of h) {
-                        const d = await decrypt(m.ciphertext);
-                        if(d) render(m.id, m.sender, m.avatar, d.text, d.time, d.isGif, m.sender===username);
-                    }
+            ws.onmessage = async (event) => {
+                const payload = JSON.parse(event.data);
+                if (payload.type === "message") {
+                    if (payload.sender === username) return;
+                    const dec = await decryptData(payload.ciphertext);
+                    if (dec) renderMessage(payload.id, payload.sender, payload.avatar, dec.text, dec.time, dec.isGif, false);
                 }
-                if(p.type === "message") {
-                    const d = await decrypt(p.ciphertext);
-                    if(d) {
-                        render(p.id, p.sender, p.avatar, d.text, d.time, d.isGif, p.sender===username);
-                        if(p.sender !== username && document.hidden) new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg').play();
-                    }
-                }
-                if(p.type === "delete") document.getElementById(p.id)?.remove();
             };
         }
 
-        function render(id, s, a, t, tm, g, me) {
-            if(rendered.has(id)) return; rendered.add(id);
-            const d = document.getElementById("messages"), w = document.createElement("div");
-            w.id = id; w.className = `msg-wrapper ${me?'my-wrapper':'other-wrapper'}`;
-            w.innerHTML = `<div class="meta">${a} ${s} • ${tm}</div><div class="message ${me?'my-message':'other-message'}">${g?`<img src="${t}" style="max-width:100%;border-radius:10px">`:t}</div>`;
-            if(me) w.onclick = () => confirm("Delete?") && ws.send(JSON.stringify({type:"delete", id}));
-            d.appendChild(w); d.scrollTop = d.scrollHeight;
+        function leaveChat() {
+            location.reload(); // Hard reset to clear theme and memory
         }
 
-        function sendText() {
-            const i = document.getElementById("messageInput");
-            if(!i.value) return;
-            const id = "msg-"+Date.now(), tm = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
-            encrypt({text:i.value, time:tm, isGif:false}).then(c => {
-                ws.send(JSON.stringify({type:"message", id, sender:username, avatar:userAvatar, ciphertext:c, password:groupPass}));
-            });
-            i.value = "";
+        async function sendPayload(content, isGif) {
+            if (!content) return;
+            const msgId = "msg-" + Date.now();
+            const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            renderMessage(msgId, username, userAvatar, content, timeStr, isGif, true);
+            const ciphertext = await encryptData({ text: content, isGif: isGif, time: timeStr });
+            ws.send(JSON.stringify({ type: "message", id: msgId, sender: username, avatar: userAvatar, ciphertext: ciphertext }));
         }
 
-        function sendGif() {
-            const u = prompt("GIF Link:");
-            if(!u) return;
-            const id = "msg-"+Date.now(), tm = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
-            encrypt({text:u, time:tm, isGif:true}).then(c => {
-                ws.send(JSON.stringify({type:"message", id, sender:username, avatar:userAvatar, ciphertext:c, password:groupPass}));
-            });
+        function sendText() { sendPayload(document.getElementById("messageInput").value, false); document.getElementById("messageInput").value = ''; }
+        function sendGif() { const url = prompt("Link:"); if (url) sendPayload(url, true); }
+
+        function renderMessage(id, sender, avatar, text, time, isGif, isMe) {
+            if (renderedMessages.has(id)) return;
+            renderedMessages.add(id);
+            const div = document.getElementById("messages");
+            const wrap = document.createElement("div");
+            wrap.className = `msg-wrapper ${isMe ? 'my-wrapper' : 'other-wrapper'}`;
+            
+            let color = isMe ? (isPrivate ? '#0a84ff' : '#e5e5ea') : (isPrivate ? '#3a3a3c' : '#ffffff');
+            let txtColor = (isMe && isPrivate) ? 'white' : 'black';
+            if (!isPrivate && !isMe) { wrap.style.border = "none"; }
+
+            let content = isGif ? `<img src="${text}" class="gif-img">` : text;
+            wrap.innerHTML = `
+                <div class="meta" style="color:${isPrivate?'#8e8e93':'#8e8e93'}">${avatar} ${sender} • ${time}</div>
+                <div class="message" style="background:${color}; color:${isPrivate?'white':(isMe?'black':'black')}; border:${isPrivate?'none':'1px solid #e5e5ea'}">${content}</div>
+            `;
+            div.appendChild(wrap);
+            div.scrollTop = div.scrollHeight;
         }
-        document.getElementById('messageInput').addEventListener('keypress', (e) => e.key === 'Enter' && sendText());
+
+        document.getElementById('messageInput').addEventListener('keypress', (e) => { if (e.key === 'Enter') sendText(); });
     </script>
 </body>
 </html>
