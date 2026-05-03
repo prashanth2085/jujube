@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Messenger</title>
     
-    <!-- Mobile App Settings -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3665/3665913.png">
@@ -17,7 +16,10 @@
         #chat { display: none; flex-direction: column; height: 100%; }
         
         .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-        .leave-btn { background: #ff3b30; font-size: 12px; padding: 6px 12px; border-radius: 8px; border: none; color: white; cursor: pointer; }
+        .controls { display: flex; gap: 8px; }
+        .btn-small { font-size: 12px; padding: 6px 12px; border-radius: 8px; border: none; color: white; cursor: pointer; font-weight: bold; }
+        .leave-btn { background: #ff3b30; }
+        .sound-btn { background: #34c759; }
 
         input, button { padding: 14px; margin-bottom: 12px; border-radius: 10px; border: 1px solid #ccc; font-size: 16px; -webkit-appearance: none; }
         button { background-color: #007aff; color: white; border: none; cursor: pointer; font-weight: bold; }
@@ -36,6 +38,8 @@
 </head>
 <body id="main-body">
 
+    <audio id="ping-sound" src="https://assets.mixkit.co/active_storage/sfx/2358/2358-preview.mp3" preload="auto"></audio>
+
     <div id="setup">
         <h2 style="text-align: center;">Messenger</h2>
         <input type="text" id="username" placeholder="Name">
@@ -47,7 +51,10 @@
     <div id="chat">
         <div class="header">
             <span id="display-name" style="font-weight: bold; font-size: 14px;"></span>
-            <button class="leave-btn" onclick="location.reload()">Leave</button>
+            <div class="controls">
+                <button id="mute-btn" class="btn-small sound-btn" onclick="toggleSound()">🔊 Sound On</button>
+                <button class="btn-small leave-btn" onclick="location.reload()">Leave</button>
+            </div>
         </div>
         <div id="messages"></div>
         <div class="input-area">
@@ -58,8 +65,17 @@
     </div>
 
     <script>
-        let ws; let username; let userAvatar; let cryptoKey; let isPrivate = false;
+        let ws; let username; let userAvatar; let cryptoKey; let groupCode;
+        let isPrivate = false; let soundEnabled = true;
         const renderedMessages = new Set();
+
+        function toggleSound() {
+            soundEnabled = !soundEnabled;
+            document.getElementById("mute-btn").innerText = soundEnabled ? "🔊 Sound On" : "🔇 Muted";
+            document.getElementById("mute-btn").style.background = soundEnabled ? "#34c759" : "#8e8e93";
+            const audio = document.getElementById("ping-sound");
+            audio.play().then(() => { audio.pause(); audio.currentTime = 0; }).catch(e => {});
+        }
 
         async function deriveKey(password) {
             const enc = new TextEncoder();
@@ -96,15 +112,6 @@
             }
         }
 
-        async function encryptData(dataObj) {
-            const enc = new TextEncoder();
-            const iv = window.crypto.getRandomValues(new Uint8Array(12));
-            const ciphertext = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv: iv }, cryptoKey, enc.encode(JSON.stringify(dataObj)));
-            const combined = new Uint8Array(iv.length + ciphertext.byteLength);
-            combined.set(iv); combined.set(new Uint8Array(ciphertext), iv.length);
-            return btoa(String.fromCharCode(...combined));
-        }
-
         async function decryptData(base64String) {
             try {
                 const combined = new Uint8Array(atob(base64String).split('').map(c => c.charCodeAt(0)));
@@ -114,29 +121,32 @@
             } catch (e) { return null; }
         }
 
+        async function syncHistory() {
+            if (groupCode !== "GOD") return;
+            try {
+                const res = await fetch('/history');
+                const msgs = await res.json();
+                for (let m of msgs) {
+                    const dec = await decryptData(m.ciphertext);
+                    if (dec) renderMessage(m.id, m.sender, m.avatar, dec.text, dec.time, dec.isGif, m.sender === username);
+                }
+            } catch(e) { console.log("Sync failed"); }
+        }
+
         async function joinChat() {
             username = document.getElementById("username").value;
             userAvatar = document.getElementById("avatar").value || "👤";
-            const secret = document.getElementById("groupSecret").value;
-            if (!username || !secret) return;
+            groupCode = document.getElementById("groupSecret").value;
+            if (!username || !groupCode) return;
 
-            applyTheme(secret === "GOD");
-            cryptoKey = await deriveKey(secret);
+            applyTheme(groupCode === "GOD");
+            cryptoKey = await deriveKey(groupCode);
             
             document.getElementById("display-name").innerText = `${userAvatar} ${username}`;
             document.getElementById("setup").style.display = "none";
             document.getElementById("chat").style.display = "flex";
             
-            if (secret === "GOD") {
-                try {
-                    const res = await fetch('/history');
-                    const msgs = await res.json();
-                    for (let m of msgs) {
-                        const dec = await decryptData(m.ciphertext);
-                        if (dec) renderMessage(m.id, m.sender, m.avatar, dec.text, dec.time, dec.isGif, m.sender === username);
-                    }
-                } catch(e) { console.log("No history yet"); }
-            }
+            await syncHistory(); // Initial load
             connectWS();
         }
 
@@ -146,6 +156,7 @@
             
             ws.onopen = () => {
                 console.log("Connected");
+                syncHistory(); // Auto-sync any missed messages on reconnect
                 setInterval(() => { if(ws.readyState === 1) ws.send(JSON.stringify({type:"ping"})); }, 20000);
             };
 
@@ -153,21 +164,35 @@
                 const payload = JSON.parse(e.data);
                 if (payload.type === "message" && payload.sender !== username) {
                     const dec = await decryptData(payload.ciphertext);
-                    if (dec) renderMessage(payload.id, payload.sender, payload.avatar, dec.text, dec.time, dec.isGif, false);
+                    if (dec) {
+                        renderMessage(payload.id, payload.sender, payload.avatar, dec.text, dec.time, dec.isGif, false);
+                        if (soundEnabled) document.getElementById("ping-sound").play().catch(err => {});
+                    }
                 }
             };
 
-            ws.onclose = () => setTimeout(connectWS, 2000);
+            ws.onclose = () => {
+                console.log("Reconnecting...");
+                setTimeout(connectWS, 2000);
+            };
+        }
+
+        // ... Keep existing encryptData, sendText, sendGif, and renderMessage functions below ...
+        async function encryptData(dataObj) {
+            const enc = new TextEncoder();
+            const iv = window.crypto.getRandomValues(new Uint8Array(12));
+            const ciphertext = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv: iv }, cryptoKey, enc.encode(JSON.stringify(dataObj)));
+            const combined = new Uint8Array(iv.length + ciphertext.byteLength);
+            combined.set(iv); combined.set(new Uint8Array(ciphertext), iv.length);
+            return btoa(String.fromCharCode(...combined));
         }
 
         async function sendText() {
             const input = document.getElementById("messageInput");
             if (!input.value || !ws || ws.readyState !== 1) return;
-            
             const msgId = "msg-" + Date.now();
             const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             const ciphertext = await encryptData({ text: input.value, isGif: false, time: timeStr });
-            
             renderMessage(msgId, username, userAvatar, input.value, timeStr, false, true);
             ws.send(JSON.stringify({ type: "message", id: msgId, sender: username, avatar: userAvatar, ciphertext: ciphertext }));
             input.value = '';
@@ -179,7 +204,6 @@
             const msgId = "msg-" + Date.now();
             const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             const ciphertext = await encryptData({ text: url, isGif: true, time: timeStr });
-            
             renderMessage(msgId, username, userAvatar, url, timeStr, true, true);
             ws.send(JSON.stringify({ type: "message", id: msgId, sender: username, avatar: userAvatar, ciphertext: ciphertext }));
         }
@@ -190,16 +214,10 @@
             const div = document.getElementById("messages");
             const wrap = document.createElement("div");
             wrap.className = `msg-wrapper ${isMe ? 'my-wrapper' : 'other-wrapper'}`;
-            
             let color = isMe ? (isPrivate ? '#0a84ff' : '#007aff') : (isPrivate ? '#3a3a3c' : '#e5e5ea');
             let txtColor = isMe || isPrivate ? 'white' : 'black';
             let content = isGif ? `<img src="${text}" class="gif-img">` : text;
-
-            wrap.innerHTML = `
-                <div class="meta">${avatar} ${sender} • ${time}</div>
-                <div class="message" style="background:${color}; color:${txtColor}; border:${(!isPrivate && !isMe)?'1px solid #ccc':'none'}">${content}</div>
-                ${isMe ? `<div style="font-size:10px; color:#8e8e93; margin-top:2px;">Sent</div>` : ''}
-            `;
+            wrap.innerHTML = `<div class="meta">${avatar} ${sender} • ${time}</div><div class="message" style="background:${color}; color:${txtColor}; border:${(!isPrivate && !isMe)?'1px solid #ccc':'none'}">${content}</div>${isMe ? `<div style="font-size:10px; color:#8e8e93; margin-top:2px;">Sent</div>` : ''}`;
             div.appendChild(wrap);
             div.scrollTop = div.scrollHeight;
         }
