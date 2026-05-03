@@ -3,11 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>System Portal</title>
+    <title>Secure Portal</title>
     
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black">
-    <!-- Discrete Shield Icon -->
     <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/1063/1063231.png">
 
     <style>
@@ -29,16 +28,15 @@
         .msg-wrapper { display: flex; flex-direction: column; margin-bottom: 12px; max-width: 85%; cursor: pointer; }
         .my-wrapper { align-self: flex-end; align-items: flex-end; }
         .other-wrapper { align-self: flex-start; align-items: flex-start; }
-        .meta { font-size: 11px; opacity: 0.6; margin-bottom: 2px; }
+        .meta { font-size: 11px; opacity: 0.8; margin-bottom: 2px; }
         .message { padding: 8px 14px; border-radius: 18px; word-wrap: break-word; font-size: 15px; }
         
-        .input-area { display: flex; gap: 5px; align-items: center; }
+        .input-area { display: flex; gap: 8px; align-items: center; }
         .input-area input { flex-grow: 1; margin-bottom: 0; }
-        .img-preview { max-width: 100%; border-radius: 12px; margin-top: 4px; display: block; }
+        .img-content { max-width: 100%; border-radius: 12px; margin-top: 4px; display: block; }
         
-        /* Hidden file input */
         #fileInput { display: none; }
-        .icon-btn { background: #5856d6; padding: 10px; font-size: 18px; line-height: 1; }
+        .img-btn { background: #5856d6; padding: 12px; border-radius: 10px; cursor: pointer; font-size: 20px; display: flex; align-items: center; justify-content: center; }
     </style>
 </head>
 <body id="main-body">
@@ -55,7 +53,8 @@
 
     <div id="chat">
         <div class="header">
-            <span id="display-name" style="font-weight: bold; font-size: 14px;"></span>
+            <!-- FIXED: Added explicit white color for name visibility -->
+            <span id="display-name" style="font-weight: bold; font-size: 14px; color: #ffffff;"></span>
             <div class="controls">
                 <button id="mute-btn" class="btn-small sound-btn" onclick="toggleSound()">🔊 Audio</button>
                 <button class="btn-small leave-btn" onclick="location.reload()">Exit</button>
@@ -63,8 +62,8 @@
         </div>
         <div id="messages"></div>
         <div class="input-area">
-            <label for="fileInput" class="icon-btn" style="border-radius:10px; cursor:pointer;">🖼️</label>
-            <input type="file" id="fileInput" accept="image/*" onchange="handleImage(this)">
+            <label for="fileInput" class="img-btn">🖼️</label>
+            <input type="file" id="fileInput" accept="image/*" onchange="processImage(this)">
             <input type="text" id="messageInput" placeholder="Secure comms..." autocomplete="off">
             <button onclick="sendText()" style="padding: 14px 20px;">Send</button>
         </div>
@@ -103,15 +102,19 @@
             const msgs = document.getElementById("messages");
             const chatBox = document.getElementById("chat");
             const inputs = document.querySelectorAll("input");
+            const nameDisplay = document.getElementById("display-name");
+
             if (isGod) {
                 body.style.backgroundColor = "#000000";
                 chatBox.style.backgroundColor = "#1c1c1e";
                 msgs.style.backgroundColor = "#000";
+                nameDisplay.style.color = "#ffffff"; // Force white name
                 inputs.forEach(i => { i.style.background = "#2c2c2e"; i.style.color = "white"; });
                 isPrivate = true;
             } else {
                 body.style.backgroundColor = "#ffffff";
                 msgs.style.backgroundColor = "#f2f2f7";
+                nameDisplay.style.color = "#000000";
                 isPrivate = false;
             }
         }
@@ -138,10 +141,10 @@
             if (groupCode !== "GOD") return;
             const res = await fetch('/history');
             const msgs = await res.json();
-            msgs.forEach(async m => {
+            for (let m of msgs) {
                 const dec = await decryptData(m.ciphertext);
                 if (dec) renderMessage(m.id, m.sender, m.avatar, dec.text, dec.time, dec.isImg, m.sender === username);
-            });
+            }
         }
 
         async function joinChat() {
@@ -151,6 +154,7 @@
             if (!username || !groupCode) return;
             cryptoKey = await deriveKey(groupCode);
             applyTheme(groupCode === "GOD");
+            document.getElementById("display-name").innerText = `${userAvatar} ${username}`;
             document.getElementById("setup").style.display = "none";
             document.getElementById("chat").style.display = "flex";
             appActive = true;
@@ -180,6 +184,7 @@
         }
 
         async function sendPayload(content, isImg) {
+            if (!ws || ws.readyState !== 1) return alert("Connection lost. Re-syncing...");
             const msgId = "msg-" + Date.now();
             const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             const ciphertext = await encryptData({ text: content, isImg: isImg, time: timeStr });
@@ -192,10 +197,25 @@
             if (i.value) { sendPayload(i.value, false); i.value = ''; }
         }
 
-        function handleImage(input) {
+        // NEW: Image Compression Logic to ensure upload works
+        function processImage(input) {
             if (input.files && input.files[0]) {
                 const reader = new FileReader();
-                reader.onload = (e) => sendPayload(e.target.result, true);
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        const max_size = 800; // Resize to max 800px width/height
+                        let width = img.width; let height = img.height;
+                        if (width > height) { if (width > max_size) { height *= max_size / width; width = max_size; }
+                        } else { if (height > max_size) { width *= max_size / height; height = max_size; } }
+                        canvas.width = width; canvas.height = height;
+                        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+                        const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7); // 70% quality
+                        sendPayload(compressedBase64, true);
+                    };
+                    img.src = e.target.result;
+                };
                 reader.readAsDataURL(input.files[0]);
                 input.value = ''; 
             }
@@ -217,8 +237,8 @@
             wrap.className = `msg-wrapper ${isMe ? 'my-wrapper' : 'other-wrapper'}`;
             wrap.onclick = () => deleteMessage(id);
             let color = isMe ? (isPrivate ? '#0a84ff' : '#007aff') : (isPrivate ? '#3a3a3c' : '#e5e5ea');
-            let content = isImg ? `<img src="${text}" class="img-preview">` : text;
-            wrap.innerHTML = `<div class="meta">${avatar} ${sender} • ${time}</div><div class="message" style="background:${color}; color:${isMe||isPrivate?'white':'black'}">${content}</div>`;
+            let content = isImg ? `<img src="${text}" class="img-content">` : text;
+            wrap.innerHTML = `<div class="meta" style="color:${isPrivate?'#ccc':'#666'}">${avatar} ${sender} • ${time}</div><div class="message" style="background:${color}; color:${isMe||isPrivate?'white':'black'}">${content}</div>`;
             div.appendChild(wrap);
             div.scrollTop = div.scrollHeight;
         }
