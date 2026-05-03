@@ -5,12 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Messenger</title>
     
+    <!-- Mobile App Settings -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3665/3665913.png">
 
     <style id="theme-style">
-        /* Default Setup UI */
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; transition: background 0.3s; }
         #setup, #chat { padding: 20px; border-radius: 16px; max-width: 600px; width: 100%; margin: 0 auto; }
         #setup { background: #f2f2f7; color: #000; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
@@ -46,7 +46,7 @@
 
     <div id="chat">
         <div class="header">
-            <span id="display-name" style="font-weight: bold; font-size: 14px; color: #8e8e93;"></span>
+            <span id="display-name" style="font-weight: bold; font-size: 14px;"></span>
             <button class="leave-btn" onclick="leaveChat()">Leave</button>
         </div>
         <div id="messages"></div>
@@ -75,12 +75,14 @@
             const msgs = document.getElementById("messages");
             const chatBox = document.getElementById("chat");
             const inputs = document.querySelectorAll("input");
+            const displayName = document.getElementById("display-name");
 
             if (isGod) {
                 body.style.backgroundColor = "#000000";
                 chatBox.style.backgroundColor = "#1c1c1e";
                 msgs.style.backgroundColor = "#000";
                 msgs.style.border = "1px solid #3a3a3c";
+                displayName.style.color = "#8e8e93";
                 inputs.forEach(i => { i.style.background = "#2c2c2e"; i.style.color = "white"; i.style.borderColor = "#3a3a3c"; });
                 isPrivate = true;
             } else {
@@ -88,6 +90,7 @@
                 chatBox.style.backgroundColor = "#ffffff";
                 msgs.style.backgroundColor = "#f2f2f7";
                 msgs.style.border = "1px solid #e5e5ea";
+                displayName.style.color = "#8e8e93";
                 inputs.forEach(i => { i.style.background = "#ffffff"; i.style.color = "black"; i.style.borderColor = "#ccc"; });
                 isPrivate = false;
             }
@@ -120,21 +123,24 @@
             applyTheme(secret === "GOD");
             cryptoKey = await deriveKey(secret);
             
+            document.getElementById("display-name").innerText = `${userAvatar} ${username}`;
             document.getElementById("setup").style.display = "none";
             document.getElementById("chat").style.display = "flex";
             
-            // Only load history if the secret is "GOD"
             if (secret === "GOD") {
-                const response = await fetch('/history');
-                const messages = await response.json();
-                for (let msg of messages) {
-                    const dec = await decryptData(msg.ciphertext);
-                    if (dec) renderMessage(msg.id, msg.sender, msg.avatar, dec.text, dec.time, dec.isGif, msg.sender === username);
-                }
+                try {
+                    const response = await fetch('/history');
+                    const messages = await response.json();
+                    for (let msg of messages) {
+                        const dec = await decryptData(msg.ciphertext);
+                        if (dec) renderMessage(msg.id, msg.sender, msg.avatar, dec.text, dec.time, dec.isGif, msg.sender === username);
+                    }
+                } catch(e) { console.log("No history yet"); }
             }
 
-            const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-            ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
+            // UNIVERSAL WEBSOCKET FIX
+            const wsUrl = (window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host + "/ws";
+            ws = new WebSocket(wsUrl);
             
             ws.onmessage = async (event) => {
                 const payload = JSON.parse(event.data);
@@ -144,19 +150,31 @@
                     if (dec) renderMessage(payload.id, payload.sender, payload.avatar, dec.text, dec.time, dec.isGif, false);
                 }
             };
+
+            ws.onclose = () => { console.log("Connection lost"); };
         }
 
         function leaveChat() {
-            location.reload(); // Hard reset to clear theme and memory
+            location.reload();
         }
 
         async function sendPayload(content, isGif) {
-            if (!content) return;
+            if (!content || !ws || ws.readyState !== WebSocket.OPEN) return;
             const msgId = "msg-" + Date.now();
             const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            
+            const secureData = { text: content, isGif: isGif, time: timeStr };
+            const ciphertext = await encryptData(secureData);
+            
             renderMessage(msgId, username, userAvatar, content, timeStr, isGif, true);
-            const ciphertext = await encryptData({ text: content, isGif: isGif, time: timeStr });
-            ws.send(JSON.stringify({ type: "message", id: msgId, sender: username, avatar: userAvatar, ciphertext: ciphertext }));
+            
+            ws.send(JSON.stringify({ 
+                type: "message", 
+                id: msgId, 
+                sender: username, 
+                avatar: userAvatar, 
+                ciphertext: ciphertext 
+            }));
         }
 
         function sendText() { sendPayload(document.getElementById("messageInput").value, false); document.getElementById("messageInput").value = ''; }
@@ -169,14 +187,14 @@
             const wrap = document.createElement("div");
             wrap.className = `msg-wrapper ${isMe ? 'my-wrapper' : 'other-wrapper'}`;
             
-            let color = isMe ? (isPrivate ? '#0a84ff' : '#e5e5ea') : (isPrivate ? '#3a3a3c' : '#ffffff');
-            let txtColor = (isMe && isPrivate) ? 'white' : 'black';
-            if (!isPrivate && !isMe) { wrap.style.border = "none"; }
-
+            let color = isMe ? (isPrivate ? '#0a84ff' : '#007aff') : (isPrivate ? '#3a3a3c' : '#e5e5ea');
+            let txtColor = isMe || isPrivate ? 'white' : 'black';
             let content = isGif ? `<img src="${text}" class="gif-img">` : text;
+
             wrap.innerHTML = `
-                <div class="meta" style="color:${isPrivate?'#8e8e93':'#8e8e93'}">${avatar} ${sender} • ${time}</div>
-                <div class="message" style="background:${color}; color:${isPrivate?'white':(isMe?'black':'black')}; border:${isPrivate?'none':'1px solid #e5e5ea'}">${content}</div>
+                <div class="meta">${avatar} ${sender} • ${time}</div>
+                <div class="message" style="background:${color}; color:${txtColor}; border:${(!isPrivate && !isMe)?'1px solid #ccc':'none'}">${content}</div>
+                ${isMe ? `<div style="font-size:10px; color:#8e8e93; margin-top:2px;">Sent</div>` : ''}
             `;
             div.appendChild(wrap);
             div.scrollTop = div.scrollHeight;
