@@ -10,20 +10,20 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3665/3665913.png">
 
-    <style id="theme-style">
+    <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; transition: background 0.3s; }
         #setup, #chat { padding: 20px; border-radius: 16px; max-width: 600px; width: 100%; margin: 0 auto; }
         #setup { background: #f2f2f7; color: #000; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
         #chat { display: none; flex-direction: column; height: 100%; }
         
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
         .leave-btn { background: #ff3b30; font-size: 12px; padding: 6px 12px; border-radius: 8px; border: none; color: white; cursor: pointer; }
 
         input, button { padding: 14px; margin-bottom: 12px; border-radius: 10px; border: 1px solid #ccc; font-size: 16px; -webkit-appearance: none; }
         button { background-color: #007aff; color: white; border: none; cursor: pointer; font-weight: bold; }
         
         #messages { flex-grow: 1; overflow-y: auto; margin-bottom: 15px; padding: 15px; border-radius: 12px; display: flex; flex-direction: column; }
-        .msg-wrapper { display: flex; flex-direction: column; margin-bottom: 16px; max-width: 75%; }
+        .msg-wrapper { display: flex; flex-direction: column; margin-bottom: 12px; max-width: 80%; }
         .my-wrapper { align-self: flex-end; align-items: flex-end; }
         .other-wrapper { align-self: flex-start; align-items: flex-start; }
         .meta { font-size: 11px; opacity: 0.6; margin-bottom: 2px; }
@@ -39,7 +39,7 @@
     <div id="setup">
         <h2 style="text-align: center;">Messenger</h2>
         <input type="text" id="username" placeholder="Name">
-        <input type="text" id="avatar" placeholder="Emoji (e.g. 🖕)">
+        <input type="text" id="avatar" placeholder="Emoji Avatar">
         <input type="password" id="groupSecret" placeholder="Code">
         <button onclick="joinChat()" style="width:100%;">Continue</button>
     </div>
@@ -47,13 +47,13 @@
     <div id="chat">
         <div class="header">
             <span id="display-name" style="font-weight: bold; font-size: 14px;"></span>
-            <button class="leave-btn" onclick="leaveChat()">Leave</button>
+            <button class="leave-btn" onclick="location.reload()">Leave</button>
         </div>
         <div id="messages"></div>
         <div class="input-area">
             <button style="background:#ff375f;" onclick="sendGif()">GIF</button>
             <input type="text" id="messageInput" placeholder="Message..." autocomplete="off">
-            <button id="send-btn" onclick="sendText()">Send</button>
+            <button onclick="sendText()">Send</button>
         </div>
     </div>
 
@@ -129,56 +129,60 @@
             
             if (secret === "GOD") {
                 try {
-                    const response = await fetch('/history');
-                    const messages = await response.json();
-                    for (let msg of messages) {
-                        const dec = await decryptData(msg.ciphertext);
-                        if (dec) renderMessage(msg.id, msg.sender, msg.avatar, dec.text, dec.time, dec.isGif, msg.sender === username);
+                    const res = await fetch('/history');
+                    const msgs = await res.json();
+                    for (let m of msgs) {
+                        const dec = await decryptData(m.ciphertext);
+                        if (dec) renderMessage(m.id, m.sender, m.avatar, dec.text, dec.time, dec.isGif, m.sender === username);
                     }
                 } catch(e) { console.log("No history yet"); }
             }
+            connectWS();
+        }
 
-            // UNIVERSAL WEBSOCKET FIX
-            const wsUrl = (window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host + "/ws";
+        function connectWS() {
+            const wsUrl = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws";
             ws = new WebSocket(wsUrl);
             
-            ws.onmessage = async (event) => {
-                const payload = JSON.parse(event.data);
-                if (payload.type === "message") {
-                    if (payload.sender === username) return;
+            ws.onopen = () => {
+                console.log("Connected");
+                setInterval(() => { if(ws.readyState === 1) ws.send(JSON.stringify({type:"ping"})); }, 20000);
+            };
+
+            ws.onmessage = async (e) => {
+                const payload = JSON.parse(e.data);
+                if (payload.type === "message" && payload.sender !== username) {
                     const dec = await decryptData(payload.ciphertext);
                     if (dec) renderMessage(payload.id, payload.sender, payload.avatar, dec.text, dec.time, dec.isGif, false);
                 }
             };
 
-            ws.onclose = () => { console.log("Connection lost"); };
+            ws.onclose = () => setTimeout(connectWS, 2000);
         }
 
-        function leaveChat() {
-            location.reload();
-        }
-
-        async function sendPayload(content, isGif) {
-            if (!content || !ws || ws.readyState !== WebSocket.OPEN) return;
+        async function sendText() {
+            const input = document.getElementById("messageInput");
+            if (!input.value || !ws || ws.readyState !== 1) return;
+            
             const msgId = "msg-" + Date.now();
             const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const ciphertext = await encryptData({ text: input.value, isGif: false, time: timeStr });
             
-            const secureData = { text: content, isGif: isGif, time: timeStr };
-            const ciphertext = await encryptData(secureData);
-            
-            renderMessage(msgId, username, userAvatar, content, timeStr, isGif, true);
-            
-            ws.send(JSON.stringify({ 
-                type: "message", 
-                id: msgId, 
-                sender: username, 
-                avatar: userAvatar, 
-                ciphertext: ciphertext 
-            }));
+            renderMessage(msgId, username, userAvatar, input.value, timeStr, false, true);
+            ws.send(JSON.stringify({ type: "message", id: msgId, sender: username, avatar: userAvatar, ciphertext: ciphertext }));
+            input.value = '';
         }
 
-        function sendText() { sendPayload(document.getElementById("messageInput").value, false); document.getElementById("messageInput").value = ''; }
-        function sendGif() { const url = prompt("Link:"); if (url) sendPayload(url, true); }
+        async function sendGif() {
+            const url = prompt("Link:");
+            if (!url) return;
+            const msgId = "msg-" + Date.now();
+            const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const ciphertext = await encryptData({ text: url, isGif: true, time: timeStr });
+            
+            renderMessage(msgId, username, userAvatar, url, timeStr, true, true);
+            ws.send(JSON.stringify({ type: "message", id: msgId, sender: username, avatar: userAvatar, ciphertext: ciphertext }));
+        }
 
         function renderMessage(id, sender, avatar, text, time, isGif, isMe) {
             if (renderedMessages.has(id)) return;
@@ -199,7 +203,6 @@
             div.appendChild(wrap);
             div.scrollTop = div.scrollHeight;
         }
-
         document.getElementById('messageInput').addEventListener('keypress', (e) => { if (e.key === 'Enter') sendText(); });
     </script>
 </body>
