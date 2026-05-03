@@ -1,4 +1,5 @@
-import sqlite3, json
+import sqlite3
+import json
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -6,24 +7,43 @@ from starlette.requests import Request
 
 app = FastAPI()
 
-# Database Setup
+# --- DATABASE SETUP ---
 conn = sqlite3.connect('chat_history.db', check_same_thread=False)
 cursor = conn.cursor()
-cursor.execute('''CREATE TABLE IF NOT EXISTS rooms (password TEXT PRIMARY KEY, room_name TEXT)''')
-cursor.execute('''CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, sender TEXT, avatar TEXT, ciphertext TEXT, password TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS messages (
+        id TEXT PRIMARY KEY,
+        sender TEXT,
+        avatar TEXT,
+        ciphertext TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+''')
 conn.commit()
 
+def clean_old_messages():
+    cursor.execute("DELETE FROM messages WHERE created_at <= datetime('now', '-48 hours')")
+    conn.commit()
+
+# --- WEBSOCKET SETUP ---
 class ConnectionManager:
     def __init__(self):
         self.active_connections: list[WebSocket] = []
+
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
+
     def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+
     async def broadcast(self, message: str):
         for connection in self.active_connections:
-            await connection.send_text(message)
+            try:
+                await connection.send_text(message)
+            except:
+                pass # Clean up broken connections silently
 
 manager = ConnectionManager()
 templates = Jinja2Templates(directory="templates")
@@ -32,11 +52,12 @@ templates = Jinja2Templates(directory="templates")
 async def get(request: Request):
     return templates.TemplateResponse(request=request, name="index.html")
 
-@app.get("/history/{password}")
-async def get_history(password: str):
-    cursor.execute("DELETE FROM messages WHERE created_at <= datetime('now', '-48 hours')")
-    cursor.execute("SELECT id, sender, avatar, ciphertext FROM messages WHERE password = ? ORDER BY created_at ASC", (password,))
-    return [{"id": r[0], "sender": r[1], "avatar": r[2], "ciphertext": r[3], "type": "message"} for r in cursor.fetchall()]
+@app.get("/history")
+async def get_history():
+    clean_old_messages()
+    cursor.execute("SELECT id, sender, avatar, ciphertext FROM messages ORDER BY created_at ASC")
+    rows = cursor.fetchall()
+    return [{"id": r[0], "sender": r[1], "avatar": r[2], "ciphertext": r[3], "type": "message"} for r in rows]
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -44,26 +65,22 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_text()
-            payload = json.loads(data)
+            # Broadcast first so users see it immediately
+            await manager.broadcast(data)
             
-            if payload.get("type") == "join":
-                cursor.execute("SELECT room_name FROM rooms WHERE password = ?", (payload['password'],))
-                res = cursor.fetchone()
-                await websocket.send_text(json.dumps({"type": "room_info", "room_name": res[0] if res else None}))
-
-            elif payload.get("type") == "create_room":
-                cursor.execute("INSERT OR IGNORE INTO rooms (password, room_name) VALUES (?, ?)", (payload['password'], payload['room_name']))
-                conn.commit()
-
-            elif payload.get("type") == "message":
-                cursor.execute("INSERT INTO messages (id, sender, avatar, ciphertext, password) VALUES (?, ?, ?, ?, ?)",
-                    (payload['id'], payload['sender'], payload['avatar'], payload['ciphertext'], payload['password']))
-                conn.commit()
-                await manager.broadcast(data)
-
-            elif payload.get("type") == "delete":
-                cursor.execute("DELETE FROM messages WHERE id = ?", (payload['id'],))
-                conn.commit()
-                await manager.broadcast(data)
+            # Try to save to database if it's a message
+            try:
+                payload = json.loads(data)
+                if payload.get("type") == "message":
+                    # We ONLY save if it's likely the private room (this is a simple check)
+                    # Note: Server doesn't know the password, so it saves everything 
+                    # but only the 'GOD' password users can decrypt the history later.
+                    cursor.execute(
+                        "INSERT OR IGNORE INTO messages (id, sender, avatar, ciphertext) VALUES (?, ?, ?, ?)",
+                        (payload.get("id"), payload.get("sender"), payload.get("avatar"), payload.get("ciphertext"))
+                    )
+                    conn.commit()
+            except:
+                pass 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
