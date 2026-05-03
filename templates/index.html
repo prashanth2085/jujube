@@ -3,11 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Messenger</title>
+    <title>System Portal</title>
     
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="default">
-    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3665/3665913.png">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black">
+    <!-- Discrete Shield Icon -->
+    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/1063/1063231.png">
 
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; transition: background 0.3s; }
@@ -25,16 +26,19 @@
         button { background-color: #007aff; color: white; border: none; cursor: pointer; font-weight: bold; }
         
         #messages { flex-grow: 1; overflow-y: auto; margin-bottom: 15px; padding: 15px; border-radius: 12px; display: flex; flex-direction: column; }
-        .msg-wrapper { display: flex; flex-direction: column; margin-bottom: 12px; max-width: 80%; cursor: pointer; transition: opacity 0.2s; }
-        .msg-wrapper:active { opacity: 0.5; }
+        .msg-wrapper { display: flex; flex-direction: column; margin-bottom: 12px; max-width: 85%; cursor: pointer; }
         .my-wrapper { align-self: flex-end; align-items: flex-end; }
         .other-wrapper { align-self: flex-start; align-items: flex-start; }
         .meta { font-size: 11px; opacity: 0.6; margin-bottom: 2px; }
-        .message { padding: 8px 14px; border-radius: 18px; word-wrap: break-word; font-size: 15px; position: relative; }
+        .message { padding: 8px 14px; border-radius: 18px; word-wrap: break-word; font-size: 15px; }
         
-        .input-area { display: flex; gap: 8px; }
+        .input-area { display: flex; gap: 5px; align-items: center; }
         .input-area input { flex-grow: 1; margin-bottom: 0; }
-        .gif-img { max-width: 100%; border-radius: 12px; margin-top: 4px; }
+        .img-preview { max-width: 100%; border-radius: 12px; margin-top: 4px; display: block; }
+        
+        /* Hidden file input */
+        #fileInput { display: none; }
+        .icon-btn { background: #5856d6; padding: 10px; font-size: 18px; line-height: 1; }
     </style>
 </head>
 <body id="main-body">
@@ -42,26 +46,27 @@
     <audio id="ping-sound" src="https://assets.mixkit.co/active_storage/sfx/2358/2358-preview.mp3" preload="auto"></audio>
 
     <div id="setup">
-        <h2 style="text-align: center;">Messenger</h2>
-        <input type="text" id="username" placeholder="Name">
-        <input type="text" id="avatar" placeholder="Emoji Avatar">
-        <input type="password" id="groupSecret" placeholder="Code">
-        <button onclick="joinChat()" style="width:100%;">Continue</button>
+        <h2 style="text-align: center;">Secure Portal</h2>
+        <input type="text" id="username" placeholder="Identity">
+        <input type="text" id="avatar" placeholder="Marker (Emoji)">
+        <input type="password" id="groupSecret" placeholder="Access Code">
+        <button onclick="joinChat()" style="width:100%;">Initialize</button>
     </div>
 
     <div id="chat">
         <div class="header">
             <span id="display-name" style="font-weight: bold; font-size: 14px;"></span>
             <div class="controls">
-                <button id="mute-btn" class="btn-small sound-btn" onclick="toggleSound()">🔊 Sound On</button>
-                <button class="btn-small leave-btn" onclick="location.reload()">Leave</button>
+                <button id="mute-btn" class="btn-small sound-btn" onclick="toggleSound()">🔊 Audio</button>
+                <button class="btn-small leave-btn" onclick="location.reload()">Exit</button>
             </div>
         </div>
         <div id="messages"></div>
         <div class="input-area">
-            <button style="background:#ff375f;" onclick="sendGif()">GIF</button>
-            <input type="text" id="messageInput" placeholder="Message..." autocomplete="off">
-            <button onclick="sendText()">Send</button>
+            <label for="fileInput" class="icon-btn" style="border-radius:10px; cursor:pointer;">🖼️</label>
+            <input type="file" id="fileInput" accept="image/*" onchange="handleImage(this)">
+            <input type="text" id="messageInput" placeholder="Secure comms..." autocomplete="off">
+            <button onclick="sendText()" style="padding: 14px 20px;">Send</button>
         </div>
     </div>
 
@@ -70,19 +75,15 @@
         let isPrivate = false; let soundEnabled = true; let appActive = false;
         const renderedMessages = new Set();
 
-        // 1. SOUND TOGGLE
         function toggleSound() {
             soundEnabled = !soundEnabled;
-            document.getElementById("mute-btn").innerText = soundEnabled ? "🔊 Sound On" : "🔇 Muted";
-            document.getElementById("mute-btn").style.background = soundEnabled ? "#34c759" : "#8e8e93";
+            document.getElementById("mute-btn").innerText = soundEnabled ? "🔊 Audio" : "🔇 Muted";
             const audio = document.getElementById("ping-sound");
             audio.play().then(() => { audio.pause(); audio.currentTime = 0; }).catch(e => {});
         }
 
-        // 2. AUTO-REFRESH FIX: Watch for Safari becoming active again
         document.addEventListener("visibilitychange", () => {
             if (document.visibilityState === 'visible' && appActive) {
-                console.log("App resumed. Re-syncing...");
                 syncHistory();
                 if (!ws || ws.readyState !== 1) connectWS();
             }
@@ -102,25 +103,26 @@
             const msgs = document.getElementById("messages");
             const chatBox = document.getElementById("chat");
             const inputs = document.querySelectorAll("input");
-            const displayName = document.getElementById("display-name");
-
             if (isGod) {
                 body.style.backgroundColor = "#000000";
                 chatBox.style.backgroundColor = "#1c1c1e";
                 msgs.style.backgroundColor = "#000";
-                msgs.style.border = "1px solid #3a3a3c";
-                displayName.style.color = "#8e8e93";
-                inputs.forEach(i => { i.style.background = "#2c2c2e"; i.style.color = "white"; i.style.borderColor = "#3a3a3c"; });
+                inputs.forEach(i => { i.style.background = "#2c2c2e"; i.style.color = "white"; });
                 isPrivate = true;
             } else {
                 body.style.backgroundColor = "#ffffff";
-                chatBox.style.backgroundColor = "#ffffff";
                 msgs.style.backgroundColor = "#f2f2f7";
-                msgs.style.border = "1px solid #e5e5ea";
-                displayName.style.color = "#8e8e93";
-                inputs.forEach(i => { i.style.background = "#ffffff"; i.style.color = "black"; i.style.borderColor = "#ccc"; });
                 isPrivate = false;
             }
+        }
+
+        async function encryptData(dataObj) {
+            const enc = new TextEncoder();
+            const iv = window.crypto.getRandomValues(new Uint8Array(12));
+            const ciphertext = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv: iv }, cryptoKey, enc.encode(JSON.stringify(dataObj)));
+            const combined = new Uint8Array(iv.length + ciphertext.byteLength);
+            combined.set(iv); combined.set(new Uint8Array(ciphertext), iv.length);
+            return btoa(String.fromCharCode(...combined));
         }
 
         async function decryptData(base64String) {
@@ -134,14 +136,12 @@
 
         async function syncHistory() {
             if (groupCode !== "GOD") return;
-            try {
-                const res = await fetch('/history');
-                const msgs = await res.json();
-                for (let m of msgs) {
-                    const dec = await decryptData(m.ciphertext);
-                    if (dec) renderMessage(m.id, m.sender, m.avatar, dec.text, dec.time, dec.isGif, m.sender === username);
-                }
-            } catch(e) { console.log("Sync failed"); }
+            const res = await fetch('/history');
+            const msgs = await res.json();
+            msgs.forEach(async m => {
+                const dec = await decryptData(m.ciphertext);
+                if (dec) renderMessage(m.id, m.sender, m.avatar, dec.text, dec.time, dec.isImg, m.sender === username);
+            });
         }
 
         async function joinChat() {
@@ -149,14 +149,10 @@
             userAvatar = document.getElementById("avatar").value || "👤";
             groupCode = document.getElementById("groupSecret").value;
             if (!username || !groupCode) return;
-
-            applyTheme(groupCode === "GOD");
             cryptoKey = await deriveKey(groupCode);
-            
-            document.getElementById("display-name").innerText = `${userAvatar} ${username}`;
+            applyTheme(groupCode === "GOD");
             document.getElementById("setup").style.display = "none";
             document.getElementById("chat").style.display = "flex";
-            
             appActive = true;
             await syncHistory(); 
             connectWS();
@@ -165,70 +161,54 @@
         function connectWS() {
             const wsUrl = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws";
             ws = new WebSocket(wsUrl);
-            
             ws.onopen = () => {
-                syncHistory(); 
+                syncHistory();
                 setInterval(() => { if(ws.readyState === 1) ws.send(JSON.stringify({type:"ping"})); }, 20000);
             };
-
             ws.onmessage = async (e) => {
-                const payload = JSON.parse(e.data);
-                if (payload.type === "delete") {
-                    const el = document.getElementById(payload.id);
-                    if (el) el.remove();
-                    return;
-                }
-                if (payload.type === "message" && payload.sender !== username) {
-                    const dec = await decryptData(payload.ciphertext);
+                const p = JSON.parse(e.data);
+                if (p.type === "delete") { document.getElementById(p.id)?.remove(); return; }
+                if (p.type === "message" && p.sender !== username) {
+                    const dec = await decryptData(p.ciphertext);
                     if (dec) {
-                        renderMessage(payload.id, payload.sender, payload.avatar, dec.text, dec.time, dec.isGif, false);
-                        if (soundEnabled) document.getElementById("ping-sound").play().catch(err => {});
+                        renderMessage(p.id, p.sender, p.avatar, dec.text, dec.time, dec.isImg, false);
+                        if (soundEnabled) document.getElementById("ping-sound").play().catch(() => {});
                     }
                 }
             };
-
-            ws.onclose = () => { if (appActive) setTimeout(connectWS, 2000); };
+            ws.onclose = () => setTimeout(connectWS, 2000);
         }
 
-        async function encryptData(dataObj) {
-            const enc = new TextEncoder();
-            const iv = window.crypto.getRandomValues(new Uint8Array(12));
-            const ciphertext = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv: iv }, cryptoKey, enc.encode(JSON.stringify(dataObj)));
-            const combined = new Uint8Array(iv.length + ciphertext.byteLength);
-            combined.set(iv); combined.set(new Uint8Array(ciphertext), iv.length);
-            return btoa(String.fromCharCode(...combined));
-        }
-
-        async function sendText() {
-            const input = document.getElementById("messageInput");
-            if (!input.value || !ws || ws.readyState !== 1) return;
+        async function sendPayload(content, isImg) {
             const msgId = "msg-" + Date.now();
             const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            const ciphertext = await encryptData({ text: input.value, isGif: false, time: timeStr });
-            renderMessage(msgId, username, userAvatar, input.value, timeStr, false, true);
+            const ciphertext = await encryptData({ text: content, isImg: isImg, time: timeStr });
+            renderMessage(msgId, username, userAvatar, content, timeStr, isImg, true);
             ws.send(JSON.stringify({ type: "message", id: msgId, sender: username, avatar: userAvatar, ciphertext: ciphertext }));
-            input.value = '';
         }
 
-        async function sendGif() {
-            const url = prompt("Link:");
-            if (!url) return;
-            const msgId = "msg-" + Date.now();
-            const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            const ciphertext = await encryptData({ text: url, isGif: true, time: timeStr });
-            renderMessage(msgId, username, userAvatar, url, timeStr, true, true);
-            ws.send(JSON.stringify({ type: "message", id: msgId, sender: username, avatar: userAvatar, ciphertext: ciphertext }));
+        function sendText() { 
+            const i = document.getElementById("messageInput");
+            if (i.value) { sendPayload(i.value, false); i.value = ''; }
+        }
+
+        function handleImage(input) {
+            if (input.files && input.files[0]) {
+                const reader = new FileReader();
+                reader.onload = (e) => sendPayload(e.target.result, true);
+                reader.readAsDataURL(input.files[0]);
+                input.value = ''; 
+            }
         }
 
         function deleteMessage(id) {
-            if (confirm("Delete for everyone?")) {
-                const el = document.getElementById(id);
-                if (el) el.remove();
+            if (confirm("Burn message?")) {
+                document.getElementById(id)?.remove();
                 ws.send(JSON.stringify({ type: "delete", id: id }));
             }
         }
 
-        function renderMessage(id, sender, avatar, text, time, isGif, isMe) {
+        function renderMessage(id, sender, avatar, text, time, isImg, isMe) {
             if (renderedMessages.has(id)) return;
             renderedMessages.add(id);
             const div = document.getElementById("messages");
@@ -236,11 +216,9 @@
             wrap.id = id;
             wrap.className = `msg-wrapper ${isMe ? 'my-wrapper' : 'other-wrapper'}`;
             wrap.onclick = () => deleteMessage(id);
-            
             let color = isMe ? (isPrivate ? '#0a84ff' : '#007aff') : (isPrivate ? '#3a3a3c' : '#e5e5ea');
-            let txtColor = isMe || isPrivate ? 'white' : 'black';
-            let content = isGif ? `<img src="${text}" class="gif-img">` : text;
-            wrap.innerHTML = `<div class="meta">${avatar} ${sender} • ${time}</div><div class="message" style="background:${color}; color:${txtColor}; border:${(!isPrivate && !isMe)?'1px solid #ccc':'none'}">${content}</div>${isMe ? `<div style="font-size:10px; color:#8e8e93; margin-top:2px;">Sent</div>` : ''}`;
+            let content = isImg ? `<img src="${text}" class="img-preview">` : text;
+            wrap.innerHTML = `<div class="meta">${avatar} ${sender} • ${time}</div><div class="message" style="background:${color}; color:${isMe||isPrivate?'white':'black'}">${content}</div>`;
             div.appendChild(wrap);
             div.scrollTop = div.scrollHeight;
         }
