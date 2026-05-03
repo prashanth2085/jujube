@@ -39,7 +39,6 @@
 </head>
 <body id="main-body">
 
-    <!-- Notification Sound -->
     <audio id="ping-sound" src="https://assets.mixkit.co/active_storage/sfx/2358/2358-preview.mp3" preload="auto"></audio>
 
     <div id="setup">
@@ -68,17 +67,26 @@
 
     <script>
         let ws; let username; let userAvatar; let cryptoKey; let groupCode;
-        let isPrivate = false; let soundEnabled = true;
+        let isPrivate = false; let soundEnabled = true; let appActive = false;
         const renderedMessages = new Set();
 
+        // 1. SOUND TOGGLE
         function toggleSound() {
             soundEnabled = !soundEnabled;
             document.getElementById("mute-btn").innerText = soundEnabled ? "🔊 Sound On" : "🔇 Muted";
             document.getElementById("mute-btn").style.background = soundEnabled ? "#34c759" : "#8e8e93";
-            // Required for mobile: Play then immediately pause to unlock the audio stream
             const audio = document.getElementById("ping-sound");
             audio.play().then(() => { audio.pause(); audio.currentTime = 0; }).catch(e => {});
         }
+
+        // 2. AUTO-REFRESH FIX: Watch for Safari becoming active again
+        document.addEventListener("visibilitychange", () => {
+            if (document.visibilityState === 'visible' && appActive) {
+                console.log("App resumed. Re-syncing...");
+                syncHistory();
+                if (!ws || ws.readyState !== 1) connectWS();
+            }
+        });
 
         async function deriveKey(password) {
             const enc = new TextEncoder();
@@ -149,6 +157,7 @@
             document.getElementById("setup").style.display = "none";
             document.getElementById("chat").style.display = "flex";
             
+            appActive = true;
             await syncHistory(); 
             connectWS();
         }
@@ -164,14 +173,11 @@
 
             ws.onmessage = async (e) => {
                 const payload = JSON.parse(e.data);
-                
-                // If it's a delete request from someone else
                 if (payload.type === "delete") {
                     const el = document.getElementById(payload.id);
                     if (el) el.remove();
                     return;
                 }
-
                 if (payload.type === "message" && payload.sender !== username) {
                     const dec = await decryptData(payload.ciphertext);
                     if (dec) {
@@ -181,7 +187,7 @@
                 }
             };
 
-            ws.onclose = () => setTimeout(connectWS, 2000);
+            ws.onclose = () => { if (appActive) setTimeout(connectWS, 2000); };
         }
 
         async function encryptData(dataObj) {
@@ -214,9 +220,8 @@
             ws.send(JSON.stringify({ type: "message", id: msgId, sender: username, avatar: userAvatar, ciphertext: ciphertext }));
         }
 
-        // --- NEW: DELETE LOGIC ---
         function deleteMessage(id) {
-            if (confirm("Delete this message for everyone?")) {
+            if (confirm("Delete for everyone?")) {
                 const el = document.getElementById(id);
                 if (el) el.remove();
                 ws.send(JSON.stringify({ type: "delete", id: id }));
@@ -228,9 +233,9 @@
             renderedMessages.add(id);
             const div = document.getElementById("messages");
             const wrap = document.createElement("div");
-            wrap.id = id; // Give the wrapper an ID so we can find it to delete it
+            wrap.id = id;
             wrap.className = `msg-wrapper ${isMe ? 'my-wrapper' : 'other-wrapper'}`;
-            wrap.onclick = () => deleteMessage(id); // Set the click listener
+            wrap.onclick = () => deleteMessage(id);
             
             let color = isMe ? (isPrivate ? '#0a84ff' : '#007aff') : (isPrivate ? '#3a3a3c' : '#e5e5ea');
             let txtColor = isMe || isPrivate ? 'white' : 'black';
