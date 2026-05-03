@@ -17,7 +17,7 @@
         
         .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
         .controls { display: flex; gap: 8px; }
-        .btn-small { font-size: 12px; padding: 6px 12px; border-radius: 8px; border: none; color: white; cursor: pointer; font-weight: bold; }
+        .btn-small { font-size: 11px; padding: 6px 10px; border-radius: 8px; border: none; color: white; cursor: pointer; font-weight: bold; }
         .leave-btn { background: #ff3b30; }
         .sound-btn { background: #34c759; }
 
@@ -25,11 +25,12 @@
         button { background-color: #007aff; color: white; border: none; cursor: pointer; font-weight: bold; }
         
         #messages { flex-grow: 1; overflow-y: auto; margin-bottom: 15px; padding: 15px; border-radius: 12px; display: flex; flex-direction: column; }
-        .msg-wrapper { display: flex; flex-direction: column; margin-bottom: 12px; max-width: 80%; }
+        .msg-wrapper { display: flex; flex-direction: column; margin-bottom: 12px; max-width: 80%; cursor: pointer; transition: opacity 0.2s; }
+        .msg-wrapper:active { opacity: 0.5; }
         .my-wrapper { align-self: flex-end; align-items: flex-end; }
         .other-wrapper { align-self: flex-start; align-items: flex-start; }
         .meta { font-size: 11px; opacity: 0.6; margin-bottom: 2px; }
-        .message { padding: 8px 14px; border-radius: 18px; word-wrap: break-word; font-size: 15px; }
+        .message { padding: 8px 14px; border-radius: 18px; word-wrap: break-word; font-size: 15px; position: relative; }
         
         .input-area { display: flex; gap: 8px; }
         .input-area input { flex-grow: 1; margin-bottom: 0; }
@@ -38,6 +39,7 @@
 </head>
 <body id="main-body">
 
+    <!-- Notification Sound -->
     <audio id="ping-sound" src="https://assets.mixkit.co/active_storage/sfx/2358/2358-preview.mp3" preload="auto"></audio>
 
     <div id="setup">
@@ -73,6 +75,7 @@
             soundEnabled = !soundEnabled;
             document.getElementById("mute-btn").innerText = soundEnabled ? "🔊 Sound On" : "🔇 Muted";
             document.getElementById("mute-btn").style.background = soundEnabled ? "#34c759" : "#8e8e93";
+            // Required for mobile: Play then immediately pause to unlock the audio stream
             const audio = document.getElementById("ping-sound");
             audio.play().then(() => { audio.pause(); audio.currentTime = 0; }).catch(e => {});
         }
@@ -146,7 +149,7 @@
             document.getElementById("setup").style.display = "none";
             document.getElementById("chat").style.display = "flex";
             
-            await syncHistory(); // Initial load
+            await syncHistory(); 
             connectWS();
         }
 
@@ -155,13 +158,20 @@
             ws = new WebSocket(wsUrl);
             
             ws.onopen = () => {
-                console.log("Connected");
-                syncHistory(); // Auto-sync any missed messages on reconnect
+                syncHistory(); 
                 setInterval(() => { if(ws.readyState === 1) ws.send(JSON.stringify({type:"ping"})); }, 20000);
             };
 
             ws.onmessage = async (e) => {
                 const payload = JSON.parse(e.data);
+                
+                // If it's a delete request from someone else
+                if (payload.type === "delete") {
+                    const el = document.getElementById(payload.id);
+                    if (el) el.remove();
+                    return;
+                }
+
                 if (payload.type === "message" && payload.sender !== username) {
                     const dec = await decryptData(payload.ciphertext);
                     if (dec) {
@@ -171,13 +181,9 @@
                 }
             };
 
-            ws.onclose = () => {
-                console.log("Reconnecting...");
-                setTimeout(connectWS, 2000);
-            };
+            ws.onclose = () => setTimeout(connectWS, 2000);
         }
 
-        // ... Keep existing encryptData, sendText, sendGif, and renderMessage functions below ...
         async function encryptData(dataObj) {
             const enc = new TextEncoder();
             const iv = window.crypto.getRandomValues(new Uint8Array(12));
@@ -208,12 +214,24 @@
             ws.send(JSON.stringify({ type: "message", id: msgId, sender: username, avatar: userAvatar, ciphertext: ciphertext }));
         }
 
+        // --- NEW: DELETE LOGIC ---
+        function deleteMessage(id) {
+            if (confirm("Delete this message for everyone?")) {
+                const el = document.getElementById(id);
+                if (el) el.remove();
+                ws.send(JSON.stringify({ type: "delete", id: id }));
+            }
+        }
+
         function renderMessage(id, sender, avatar, text, time, isGif, isMe) {
             if (renderedMessages.has(id)) return;
             renderedMessages.add(id);
             const div = document.getElementById("messages");
             const wrap = document.createElement("div");
+            wrap.id = id; // Give the wrapper an ID so we can find it to delete it
             wrap.className = `msg-wrapper ${isMe ? 'my-wrapper' : 'other-wrapper'}`;
+            wrap.onclick = () => deleteMessage(id); // Set the click listener
+            
             let color = isMe ? (isPrivate ? '#0a84ff' : '#007aff') : (isPrivate ? '#3a3a3c' : '#e5e5ea');
             let txtColor = isMe || isPrivate ? 'white' : 'black';
             let content = isGif ? `<img src="${text}" class="gif-img">` : text;
