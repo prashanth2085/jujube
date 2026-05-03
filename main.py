@@ -1,5 +1,6 @@
 import sqlite3
 import json
+import asyncio
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -25,7 +26,7 @@ def clean_old_messages():
     cursor.execute("DELETE FROM messages WHERE created_at <= datetime('now', '-48 hours')")
     conn.commit()
 
-# --- WEBSOCKET SETUP ---
+# --- WEBSOCKET MANAGER ---
 class ConnectionManager:
     def __init__(self):
         self.active_connections: list[WebSocket] = []
@@ -43,7 +44,8 @@ class ConnectionManager:
             try:
                 await connection.send_text(message)
             except:
-                pass # Clean up broken connections silently
+                # Remove dead connections
+                self.disconnect(connection)
 
 manager = ConnectionManager()
 templates = Jinja2Templates(directory="templates")
@@ -65,22 +67,20 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_text()
-            # Broadcast first so users see it immediately
+            
+            # 1. Immediate Broadcast
             await manager.broadcast(data)
             
-            # Try to save to database if it's a message
+            # 2. Database Handling
             try:
                 payload = json.loads(data)
                 if payload.get("type") == "message":
-                    # We ONLY save if it's likely the private room (this is a simple check)
-                    # Note: Server doesn't know the password, so it saves everything 
-                    # but only the 'GOD' password users can decrypt the history later.
                     cursor.execute(
                         "INSERT OR IGNORE INTO messages (id, sender, avatar, ciphertext) VALUES (?, ?, ?, ?)",
                         (payload.get("id"), payload.get("sender"), payload.get("avatar"), payload.get("ciphertext"))
                     )
                     conn.commit()
             except:
-                pass 
+                pass # Ignore pings or malformed data
     except WebSocketDisconnect:
         manager.disconnect(websocket)
