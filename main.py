@@ -1,6 +1,5 @@
 import sqlite3
 import json
-import asyncio
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -9,6 +8,7 @@ from starlette.requests import Request
 app = FastAPI()
 
 # --- DATABASE SETUP ---
+# SQLite is stable, but remember Render Free wipes files on deploy/hard restart.
 conn = sqlite3.connect('chat_history.db', check_same_thread=False)
 cursor = conn.cursor()
 cursor.execute('''
@@ -44,7 +44,6 @@ class ConnectionManager:
             try:
                 await connection.send_text(message)
             except:
-                # Remove dead connections
                 self.disconnect(connection)
 
 manager = ConnectionManager()
@@ -67,20 +66,30 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_text()
+            payload = json.loads(data)
             
-            # 1. Immediate Broadcast
-            await manager.broadcast(data)
+            # 1. Handle Deletion Requests
+            if payload.get("type") == "delete":
+                msg_id = payload.get("id")
+                cursor.execute("DELETE FROM messages WHERE id = ?", (msg_id,))
+                conn.commit()
+                await manager.broadcast(data) # Tell everyone else to remove it
             
-            # 2. Database Handling
-            try:
-                payload = json.loads(data)
-                if payload.get("type") == "message":
-                    cursor.execute(
-                        "INSERT OR IGNORE INTO messages (id, sender, avatar, ciphertext) VALUES (?, ?, ?, ?)",
-                        (payload.get("id"), payload.get("sender"), payload.get("avatar"), payload.get("ciphertext"))
-                    )
-                    conn.commit()
-            except:
-                pass # Ignore pings or malformed data
+            # 2. Handle New Messages
+            elif payload.get("type") == "message":
+                cursor.execute(
+                    "INSERT OR IGNORE INTO messages (id, sender, avatar, ciphertext) VALUES (?, ?, ?, ?)",
+                    (payload.get("id"), payload.get("sender"), payload.get("avatar"), payload.get("ciphertext"))
+                )
+                conn.commit()
+                await manager.broadcast(data)
+                
+            # 3. Handle Pings (Keep-Alive)
+            elif payload.get("type") == "ping":
+                pass 
+
     except WebSocketDisconnect:
+        manager.disconnect(websocket)
+    except Exception as e:
+        print(f"Error: {e}")
         manager.disconnect(websocket)
